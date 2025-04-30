@@ -1,4 +1,5 @@
 import logging
+# Импортируем необходимые модули для работы с датой и временем
 from datetime import datetime, time, date, timedelta, UTC
 import asyncpg
 import pytz
@@ -7,17 +8,14 @@ from typing import Optional, List, Dict, Any
 # Импортируем строки подключения из файла конфигурации
 from config import DATABASE_URL, DATABASE_URL_LOG
 
-# Настраиваем логирование для этого модуля
+# Настраиваем логирование
 logger = logging.getLogger(__name__)
 
-# Глобальная переменная для хранения пула соединений с БД
+# Глобальная переменная для пула соединений
 db_pool: asyncpg.Pool | None = None
 
 async def create_db_pool():
-    """
-    Создает (если еще не создан) и возвращает пул соединений с базой данных PostgreSQL.
-    Также проверяет и создает необходимые таблицы при первом подключении.
-    """
+    """Создает пул соединений с базой данных."""
     global db_pool
     if db_pool: return db_pool
     logger.info("Создание пула соединений с PostgreSQL...")
@@ -25,14 +23,14 @@ async def create_db_pool():
     try:
         db_pool = await asyncpg.create_pool(DATABASE_URL, max_size=10)
         logger.info("Пул соединений успешно создан.")
-        await create_tables_if_not_exist(db_pool)
+        await create_tables_if_not_exist(db_pool) # Проверяем/создаем все таблицы
     except Exception as e:
         logger.critical(f"Не удалось подключиться к базе данных: {e}", exc_info=True)
         exit("Ошибка подключения к БД")
     return db_pool
 
 async def close_db_pool():
-    """Закрывает пул соединений с базой данных при остановке бота."""
+    """Закрывает пул соединений с базой данных."""
     global db_pool
     if db_pool:
         logger.info("Закрытие пула соединений...")
@@ -41,13 +39,10 @@ async def close_db_pool():
         logger.info("Пул соединений закрыт.")
 
 async def create_tables_if_not_exist(pool: asyncpg.Pool):
-    """
-    Проверяет наличие необходимых таблиц в БД и создает их, если они отсутствуют.
-    Выполняется в транзакции для атомарности.
-    """
+    """Создает все необходимые таблицы, если они еще не существуют."""
     async with pool.acquire() as connection:
         async with connection.transaction():
-            # Создание таблицы users
+            # Таблица users
             await connection.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id BIGINT PRIMARY KEY, first_name VARCHAR(255), last_name VARCHAR(255),
@@ -57,7 +52,7 @@ async def create_tables_if_not_exist(pool: asyncpg.Pool):
                     daily_calorie_goal INTEGER
                 );
             """)
-            # Создание таблицы user_products
+            # Таблица user_products
             await connection.execute("""
                 CREATE TABLE IF NOT EXISTS user_products (
                     product_id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
@@ -66,14 +61,13 @@ async def create_tables_if_not_exist(pool: asyncpg.Pool):
                     CONSTRAINT user_products_user_id_product_name_key UNIQUE (user_id, product_name)
                 );
             """)
-            # Индексы для user_products
             await connection.execute("""
                 CREATE INDEX IF NOT EXISTS idx_user_products_user_id_name ON user_products (user_id, product_name);
             """)
             await connection.execute("""
                 CREATE INDEX IF NOT EXISTS idx_user_products_name_gin ON user_products USING gin (product_name gin_trgm_ops);
             """)
-            # Создание таблицы food_entries
+            # Таблица food_entries
             await connection.execute("""
                 CREATE TABLE IF NOT EXISTS food_entries (
                     entry_id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
@@ -82,11 +76,28 @@ async def create_tables_if_not_exist(pool: asyncpg.Pool):
                     entry_timestamp TIMESTAMPTZ NOT NULL
                 );
             """)
-            # Индекс для food_entries
             await connection.execute("""
                 CREATE INDEX IF NOT EXISTS idx_food_entries_user_id_timestamp ON food_entries (user_id, entry_timestamp);
             """)
-            # Функция и триггер для updated_at
+
+            # --- НОВАЯ ТАБЛИЦА: История норм калорий ---
+            await connection.execute("""
+                CREATE TABLE IF NOT EXISTS goal_history (
+                    history_id SERIAL PRIMARY KEY, -- ID записи истории
+                    user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE, -- Связь с пользователем
+                    effective_date DATE NOT NULL, -- Дата, с которой действует эта норма
+                    daily_calorie_goal INTEGER NOT NULL, -- Значение нормы на эту дату
+                    -- Уникальность для пользователя и даты, чтобы не было дублей на один день
+                    CONSTRAINT goal_history_user_date_key UNIQUE (user_id, effective_date)
+                );
+            """)
+            # Индекс для быстрого поиска истории по пользователю и дате
+            await connection.execute("""
+                CREATE INDEX IF NOT EXISTS idx_goal_history_user_date ON goal_history (user_id, effective_date);
+            """)
+            # --- КОНЕЦ НОВОЙ ТАБЛИЦЫ ---
+
+            # Функция и триггер для updated_at в users
             await connection.execute("""
                 CREATE OR REPLACE FUNCTION update_updated_at_column() RETURNS TRIGGER AS $$
                 BEGIN NEW.updated_at = NOW(); RETURN NEW; END;
@@ -117,14 +128,9 @@ async def add_or_update_user(pool: asyncpg.Pool, user_id: int, first_name: str |
             logger.error(f"Ошибка при добавлении/обновлении пользователя {user_id}: {e}", exc_info=True)
             return False
 
-# --- ИЗМЕНЕНО: Добавляем daily_calorie_goal в SELECT ---
 async def get_user_profile_data(pool: asyncpg.Pool, user_id: int) -> Optional[asyncpg.Record]:
     """Получает данные профиля пользователя (включая рассчитанную норму)."""
-    sql = """
-        SELECT current_weight, height, gender, goal, daily_calorie_goal
-        FROM users
-        WHERE user_id = $1;
-    """
+    sql = "SELECT current_weight, height, gender, goal, daily_calorie_goal FROM users WHERE user_id = $1;"
     async with pool.acquire() as connection:
         try:
             row = await connection.fetchrow(sql, user_id)
@@ -140,20 +146,13 @@ async def update_user_profile_field(pool: asyncpg.Pool, user_id: int, field: str
     if field not in allowed_fields:
         logger.error(f"Попытка обновить неразрешенное поле '{field}' для пользователя {user_id}")
         return False
-
     sql = f"UPDATE users SET {field} = $1, updated_at = NOW() WHERE user_id = $2;"
     async with pool.acquire() as connection:
         try:
             result = await connection.execute(sql, value, user_id)
-            if result == 'UPDATE 1':
-                logger.info(f"Поле '{field}' для пользователя {user_id} обновлено на '{value}'.")
-                return True
-            else:
-                logger.warning(f"Не удалось обновить поле '{field}' для {user_id} (пользователь не найден?).")
-                return False
-        except Exception as e:
-            logger.error(f"Ошибка при обновлении поля '{field}' для {user_id}: {e}", exc_info=True)
-            return False
+            if result == 'UPDATE 1': logger.info(f"Поле '{field}' для пользователя {user_id} обновлено на '{value}'."); return True
+            else: logger.warning(f"Не удалось обновить поле '{field}' для {user_id} (пользователь не найден?)."); return False
+        except Exception as e: logger.error(f"Ошибка при обновлении поля '{field}' для {user_id}: {e}", exc_info=True); return False
 
 async def get_user_timezone(pool: asyncpg.Pool, user_id: int) -> str:
     """Получает часовой пояс пользователя из базы данных."""
@@ -163,9 +162,7 @@ async def get_user_timezone(pool: asyncpg.Pool, user_id: int) -> str:
             tz_name = await connection.fetchval(sql, user_id)
             logger.debug(f"Получен часовой пояс для {user_id}: '{tz_name}' (возвращаем '{tz_name if tz_name else 'UTC'}')")
             return tz_name if tz_name else 'UTC'
-        except Exception as e:
-            logger.error(f"Ошибка при получении часового пояса для {user_id}: {e}", exc_info=True)
-            return 'UTC'
+        except Exception as e: logger.error(f"Ошибка при получении часового пояса для {user_id}: {e}", exc_info=True); return 'UTC'
 
 async def update_user_timezone_db(pool: asyncpg.Pool, user_id: int, timezone: str):
     """Обновляет часовой пояс пользователя в базе данных."""
@@ -177,7 +174,76 @@ async def update_user_daily_goal(pool: asyncpg.Pool, user_id: int, calories: Opt
     """Обновляет рассчитанную дневную норму калорий пользователя."""
     await update_user_profile_field(pool, user_id, "daily_calorie_goal", calories)
 
-# --- Функции отчетов (без изменений) ---
+# --- НОВАЯ ФУНКЦИЯ: Добавление записи в историю норм ---
+async def add_goal_history_entry(pool: asyncpg.Pool, user_id: int, effective_date: date, daily_calorie_goal: int):
+    """
+    Добавляет или обновляет запись в goal_history для указанной даты.
+    Использует INSERT ... ON CONFLICT DO UPDATE.
+    """
+    sql = """
+        INSERT INTO goal_history (user_id, effective_date, daily_calorie_goal)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (user_id, effective_date) DO UPDATE SET -- Если запись на эту дату уже есть
+            daily_calorie_goal = EXCLUDED.daily_calorie_goal; -- Просто обновляем значение нормы
+    """
+    async with pool.acquire() as connection:
+        try:
+            await connection.execute(sql, user_id, effective_date, daily_calorie_goal)
+            logger.info(f"Запись в goal_history для {user_id} на {effective_date} добавлена/обновлена: {daily_calorie_goal} ккал.")
+        except Exception as e:
+            logger.error(f"Ошибка при добавлении/обновлении goal_history для {user_id} на {effective_date}: {e}", exc_info=True)
+            # Не пробрасываем ошибку дальше, т.к. это вспомогательная таблица
+
+# --- НОВАЯ ФУНКЦИЯ: Получение истории норм за период ---
+async def get_historical_norms(pool: asyncpg.Pool, user_id: int, start_date: date, end_date: date) -> List[asyncpg.Record]:
+    """
+    Получает историю изменения норм калорий пользователя за указанный период
+    и самую последнюю норму перед началом периода.
+    Возвращает список записей (effective_date, daily_calorie_goal), отсортированных по дате.
+    """
+    # Выбираем все записи, дата которых меньше или равна концу периода,
+    # а также самую последнюю запись ПЕРЕД началом периода (если она есть),
+    # чтобы знать норму, действовавшую на начало периода.
+    sql = """
+        (
+            SELECT effective_date, daily_calorie_goal
+            FROM goal_history
+            WHERE user_id = $1 AND effective_date < $2 -- Все записи до начала периода
+            ORDER BY effective_date DESC -- Сортируем по убыванию даты
+            LIMIT 1 -- Берем только самую последнюю
+        )
+        UNION ALL
+        (
+            SELECT effective_date, daily_calorie_goal
+            FROM goal_history
+            WHERE user_id = $1 AND effective_date >= $2 AND effective_date <= $3 -- Записи внутри периода
+        )
+        ORDER BY effective_date ASC; -- Сортируем итоговый результат по возрастанию даты
+    """
+    async with pool.acquire() as connection:
+        try:
+            rows = await connection.fetch(sql, user_id, start_date, end_date)
+            logger.debug(f"Получено {len(rows)} записей истории норм для {user_id} за период [{start_date}, {end_date}].")
+            return rows
+        except Exception as e:
+            logger.error(f"Ошибка при получении истории норм для {user_id}: {e}", exc_info=True)
+            return []
+
+# --- НОВАЯ ФУНКЦИЯ: Получение даты первой записи в истории ---
+async def get_first_goal_history_date(pool: asyncpg.Pool, user_id: int) -> Optional[date]:
+    """Получает дату самой первой записи в истории норм для пользователя."""
+    sql = "SELECT MIN(effective_date) FROM goal_history WHERE user_id = $1;"
+    async with pool.acquire() as connection:
+        try:
+            first_date = await connection.fetchval(sql, user_id)
+            logger.debug(f"Первая дата в истории норм для {user_id}: {first_date}")
+            return first_date # Может быть None, если истории нет
+        except Exception as e:
+            logger.error(f"Ошибка при получении первой даты истории норм для {user_id}: {e}", exc_info=True)
+            return None
+
+
+# --- Функции получения записей о еде (без изменений) ---
 async def get_food_entries_for_period(pool: asyncpg.Pool, user_id: int, start_dt_local: datetime, end_dt_exclusive_local: datetime) -> List[asyncpg.Record]:
     start_dt_utc = start_dt_local.astimezone(pytz.utc); end_dt_exclusive_utc = end_dt_exclusive_local.astimezone(pytz.utc)
     logger.debug(f"Запрос записей для {user_id}. Локальные границы: [{start_dt_local}, {end_dt_exclusive_local}). UTC границы: [{start_dt_utc}, {end_dt_exclusive_utc})")
