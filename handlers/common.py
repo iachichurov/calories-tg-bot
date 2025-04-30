@@ -1,0 +1,99 @@
+import logging
+from aiogram import Router, Bot
+from aiogram.filters import CommandStart, Command
+from aiogram.types import Message, ReplyKeyboardRemove, BotCommand, BotCommandScopeDefault
+from aiogram.fsm.context import FSMContext
+
+# Импортируем функции БД и пул соединений
+import database as db
+# Импортируем обработчик отчетов, чтобы показать сводку после /start
+from .reports import handle_today
+# Импортируем основную клавиатуру
+from keyboards import main_action_keyboard
+
+logger = logging.getLogger(__name__)
+
+# Создаем роутер для общих команд
+router = Router()
+
+async def set_main_menu(bot: Bot):
+    """Функция для настройки кнопки Menu в Telegram"""
+    main_menu_commands = [
+        BotCommand(command="/start", description="🚀 Запуск / Перезапуск"),
+        BotCommand(command="/add", description="➕ Добавить продукт"),
+        BotCommand(command="/today", description="📊 Сводка за сегодня"),
+        BotCommand(command="/week", description="📅 Отчет за неделю"),
+        BotCommand(command="/month", description="🗓️ Отчет за месяц"),
+        BotCommand(command="/timezone", description="⚙️ Установить часовой пояс"), # <--- Добавили команду
+        BotCommand(command="/cancel", description="❌ Отменить действие"),
+        BotCommand(command="/help", description="❓ Помощь")
+    ]
+    await bot.set_my_commands(main_menu_commands, BotCommandScopeDefault())
+    logger.info("Команды в меню установлены.")
+
+
+@router.message(CommandStart())
+async def handle_start_command(message: Message, state: FSMContext):
+    """Обработчик команды /start"""
+    current_state = await state.get_state()
+    if current_state is not None:
+        logger.info(f"Сброс состояния {current_state} для пользователя {message.from_user.id}")
+        await state.clear()
+
+    user = message.from_user
+    logger.info(f"Пользователь {user.id} ({user.full_name}) запустил бота.")
+
+    if db.db_pool:
+        await db.add_or_update_user(
+            pool=db.db_pool,
+            user_id=user.id,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            username=user.username
+        )
+    else:
+        logger.warning("Пул соединений с БД не инициализирован при обработке /start.")
+        await message.answer("Возникла проблема с подключением к базе данных. Попробуйте позже.", reply_markup=ReplyKeyboardRemove())
+        return
+
+    # Показываем приветствие (без клавиатуры пока)
+    await message.answer(
+        f"Привет, {user.first_name or 'Пользователь'}!\n\n"
+        f"Я твой личный помощник для учета калорий. 💪\n\n"
+        f"Используй кнопку ниже или команды из меню /.",
+    )
+    # Показываем сводку за сегодня (она покажет основную клавиатуру)
+    await handle_today(message)
+
+
+@router.message(Command("help"))
+async def handle_help_command(message: Message):
+    """Обработчик команды /help"""
+    user_id = message.from_user.id
+    logger.info(f"Пользователь {user_id} запросил помощь.")
+    await message.answer(
+        "❓ **Помощь:**\n\n"
+        "Я бот для учета калорий.\n"
+        "Нажми кнопку '➕ Добавить продукт' ниже или используй команду /add.\n"
+        "/today - посмотреть, что съедено сегодня и сколько калорий.\n"
+        "/week - отчет по калориям за последние 7 дней.\n"
+        "/month - отчет по калориям за текущий месяц.\n"
+        "/timezone - установить ваш часовой пояс для корректных отчетов.\n" # <--- Добавили описание
+        "/cancel - отменить текущее действие (например, добавление продукта).\n\n"
+        "Просто следуйте инструкциям после ввода команд.",
+        reply_markup=main_action_keyboard()
+    )
+
+# Обработчик /cancel вне состояний
+@router.message(Command("cancel"))
+async def handle_cancel_outside_state(message: Message, state: FSMContext):
+    """Обрабатывает /cancel, если пользователь не находится в каком-либо состоянии FSM."""
+    current_state = await state.get_state()
+    if current_state is None:
+        await message.answer("Нет активного действия для отмены.", reply_markup=main_action_keyboard())
+        return
+    logger.warning(f"Пользователь {message.from_user.id} ввел /cancel в неожиданном состоянии {current_state}. Сброс.")
+    await state.clear()
+    await message.answer("Действие отменено.", reply_markup=main_action_keyboard())
+    await handle_today(message)
+

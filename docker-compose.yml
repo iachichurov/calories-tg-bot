@@ -1,0 +1,51 @@
+version: '3.8' # Указываем версию Docker Compose
+
+services:
+  # Сервис для нашего Telegram-бота
+  bot:
+    build: . # Указываем Docker собирать образ из Dockerfile в текущей директории
+    container_name: calorie_bot_app # Имя контейнера (опционально)
+    restart: always # Автоматически перезапускать контейнер при сбое или после перезагрузки сервера
+    env_file:
+      - .env # Загружать переменные окружения из файла .env на хосте
+    depends_on:
+      db:
+        condition: service_healthy # Ждать, пока сервис db не станет "здоровым" (см. healthcheck ниже)
+    networks:
+      - bot-network # Подключаем к нашей сети
+
+  # Сервис для базы данных PostgreSQL
+  db:
+    image: postgres:15 # Используем официальный образ PostgreSQL 15 (можешь выбрать другую версию)
+    container_name: calorie_bot_db_container # Имя контейнера (опционально)
+    restart: always # Автоматически перезапускать
+    environment:
+      # Переменные окружения для PostgreSQL, берутся из файла .env на хосте
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASS} # Используем пароль без URL-кодирования здесь
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data # Сохраняем данные БД в именованный том
+      # --- Опционально: скрипт для инициализации (например, создания расширения) ---
+      # - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+    #ports:
+      # Пробрасываем порт наружу только если нужен доступ к БД с хоста (например, для pgAdmin)
+      # В формате "ХОСТ:КОНТЕЙНЕР"
+      #- "127.0.0.1:5433:5432" # Пример: доступ к БД с хоста по порту 5433
+    networks:
+      - bot-network # Подключаем к нашей сети
+    healthcheck:
+      # Проверка "здоровья" контейнера БД
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s # Проверять каждые 10 секунд
+      timeout: 5s # Таймаут проверки 5 секунд
+      retries: 5 # 5 попыток перед тем, как считать сервис нездоровым
+
+# Определяем сети
+networks:
+  bot-network:
+    driver: bridge # Стандартная сеть типа bridge
+
+# Определяем именованные тома для сохранения данных
+volumes:
+  postgres_data: # Данные будут храниться здесь даже после удаления контейнера
