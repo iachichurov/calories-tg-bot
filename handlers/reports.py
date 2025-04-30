@@ -189,10 +189,11 @@ async def handle_week(message: Message):
 
     # Добавляем разбивку по дням потребления
     report_parts.append("По дням (потреблено):")
+    # Итерируем в обратном порядке: от 0 (сегодня) до num_days_report - 1 (самый старый день)
     for i in range(num_days_report):
-        current_date = report_end_date - timedelta(days=num_days_report - 1 - i) # Идем от начала к концу периода
-        cals_consumed = calories_by_day.get(current_date, 0)
-        report_parts.append(f"- {current_date.strftime('%d.%m')}: {cals_consumed} ккал")
+        current_date = report_end_date - timedelta(days=i) # Вычисляем дату (сегодня, вчера, ...)
+        cals_consumed = calories_by_day.get(current_date, 0) # Берем калории за этот день
+        report_parts.append(f"- {current_date.strftime('%d.%m')}: {cals_consumed} ккал") # Добавляем строку
 
     # Добавляем итоговые строки
     report_parts.append(f"\n--------------------")
