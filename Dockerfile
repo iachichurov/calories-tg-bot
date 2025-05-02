@@ -15,7 +15,10 @@ WORKDIR /app
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl tzdata && \
     apt-get clean && \
+    ln -fs /usr/share/zoneinfo/UTC /etc/localtime && \
+    dpkg-reconfigure -f noninteractive tzdata && \
     rm -rf /var/lib/apt/lists/*
+ENV TZ=UTC
 
 # Копируем файл с зависимостями
 COPY requirements.txt .

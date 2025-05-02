@@ -168,17 +168,26 @@ async def get_food_entries_for_period(pool: asyncpg.Pool, user_id: int, start_dt
 
 async def get_todays_food_entries(pool: asyncpg.Pool, user_id: int, tz_name: str) -> List[asyncpg.Record]:
     """Получает список записей о еде пользователя за сегодня (в его часовом поясе)."""
-    try: user_tz = pytz.timezone(tz_name)
-    except pytz.UnknownTimeZoneError: logger.warning(f"Некорректный TZ '{tz_name}' для {user_id}. Используется UTC."); user_tz = pytz.utc
-    now_local = datetime.now(user_tz); today_start_local = datetime.combine(now_local.date(), time.min, tzinfo=user_tz); next_day_start_local = today_start_local + timedelta(days=1)
-    logger.debug(f"get_todays_food_entries для {user_id} (TZ: {tz_name}). Локальные границы: [{today_start_local}, {next_day_start_local})")
-    return await get_food_entries_for_period(pool, user_id, today_start_local, next_day_start_local)
+    try:
+        user_tz = pytz.timezone(tz_name)
+    except pytz.UnknownTimeZoneError:
+        logger.warning(f"Некорректный TZ '{tz_name}' для {user_id}. Используется UTC.")
+        user_tz = pytz.utc
+    now_local = datetime.now(user_tz)
+    today_start_local = user_tz.localize(datetime.combine(now_local.date(), time.min))
+    next_day_start_local = today_start_local + timedelta(days=1)
+    logger.info(f"[DEBUG] get_todays_food_entries для {user_id} (TZ: {tz_name}) now_local={now_local}, today_start_local={today_start_local}, next_day_start_local={next_day_start_local}")
+    logger.info(f"[DEBUG] UTC-границы: start={today_start_local.astimezone(pytz.utc)}, end={next_day_start_local.astimezone(pytz.utc)}")
+    entries = await get_food_entries_for_period(pool, user_id, today_start_local, next_day_start_local)
+    for entry in entries:
+        logger.info(f"[DEBUG] entry_timestamp (UTC): {entry['entry_timestamp']}, entry_timestamp (local): {entry['entry_timestamp'].astimezone(user_tz)}")
+    return entries
 
 async def get_last_n_days_entries(pool: asyncpg.Pool, user_id: int, tz_name: str, days: int = 7) -> List[asyncpg.Record]:
     """Получает список записей о еде пользователя за последние N дней (в его часовом поясе)."""
     try: user_tz = pytz.timezone(tz_name)
     except pytz.UnknownTimeZoneError: logger.warning(f"Некорректный TZ '{tz_name}' для {user_id}. Используется UTC."); user_tz = pytz.utc
-    now_local = datetime.now(user_tz); today_start_local = datetime.combine(now_local.date(), time.min, tzinfo=user_tz); start_date_local = today_start_local - timedelta(days=days-1); end_date_exclusive_local = today_start_local + timedelta(days=1)
+    now_local = datetime.now(user_tz); today_start_local = user_tz.localize(datetime.combine(now_local.date(), time.min)); start_date_local = today_start_local - timedelta(days=days-1); end_date_exclusive_local = today_start_local + timedelta(days=1)
     logger.info(f"Запрос записей для {user_id} с {start_date_local} по <{end_date_exclusive_local} ({days} дней, TZ: {tz_name})")
     return await get_food_entries_for_period(pool, user_id, start_date_local, end_date_exclusive_local)
 
@@ -186,9 +195,9 @@ async def get_current_month_entries(pool: asyncpg.Pool, user_id: int, tz_name: s
     """Получает список записей о еде пользователя за текущий календарный месяц (в его часовом поясе)."""
     try: user_tz = pytz.timezone(tz_name)
     except pytz.UnknownTimeZoneError: logger.warning(f"Некорректный TZ '{tz_name}' для {user_id}. Используется UTC."); user_tz = pytz.utc
-    now_local = datetime.now(user_tz); current_date_local = now_local.date(); start_date_local = datetime(current_date_local.year, current_date_local.month, 1, tzinfo=user_tz)
-    if current_date_local.month == 12: next_month_start_local = datetime(current_date_local.year + 1, 1, 1, tzinfo=user_tz)
-    else: next_month_start_local = datetime(current_date_local.year, current_date_local.month + 1, 1, tzinfo=user_tz)
+    now_local = datetime.now(user_tz); current_date_local = now_local.date(); start_date_local = user_tz.localize(datetime(current_date_local.year, current_date_local.month, 1))
+    if current_date_local.month == 12: next_month_start_local = user_tz.localize(datetime(current_date_local.year + 1, 1, 1))
+    else: next_month_start_local = user_tz.localize(datetime(current_date_local.year, current_date_local.month + 1, 1))
     end_date_exclusive_local = next_month_start_local
     logger.info(f"Запрос записей для {user_id} с {start_date_local} по <{end_date_exclusive_local} (текущий месяц, TZ: {tz_name})")
     return await get_food_entries_for_period(pool, user_id, start_date_local, end_date_exclusive_local)
