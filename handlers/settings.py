@@ -64,14 +64,18 @@ async def recalculate_and_save_goal(user_id: int, state: FSMContext):
         return None
 
     # Расчет LBM
-    lbm = utils.calculate_lbm(weight_kg=float(weight), height_cm=height, gender=gender)
+    lbm = utils.calculate_lbm(
+        weight_kg=float(weight), height_cm=height, gender=gender
+    )
     if lbm is None:
         logger.warning(f"Не удалось рассчитать LBM для {user_id}. Норма не рассчитана.")
         await db.update_user_daily_goal(db.db_pool, user_id, None)
         return None
 
     # Расчет калорий
-    _, calories = utils.calculate_target_macros_and_calories(lbm=lbm, goal=goal) or (None, None)
+    _, calories = utils.calculate_target_macros_and_calories(
+        lbm=lbm, goal=goal
+    ) or (None, None)
     if calories is None:
         logger.warning(f"Не удалось рассчитать калории для {user_id}. Норма не рассчитана.")
         await db.update_user_daily_goal(db.db_pool, user_id, None)
@@ -81,17 +85,28 @@ async def recalculate_and_save_goal(user_id: int, state: FSMContext):
     try:
         await db.update_user_daily_goal(db.db_pool, user_id, calories)
         today_utc_date = datetime.now(UTC).date()
-        await db.add_goal_history_entry(db.db_pool, user_id, today_utc_date, calories)
-        logger.info(f"Норма калорий для {user_id} пересчитана ({calories} ккал) и сохранена.")
+        await db.add_goal_history_entry(
+            db.db_pool, user_id, today_utc_date, calories
+        )
+        logger.info(
+            f"Норма калорий для {user_id} пересчитана ({calories} ккал) "
+            f"и сохранена (в users и goal_history на {today_utc_date})."
+        )
         return calories
     except Exception as e:
-        logger.error(f"Ошибка при сохранении нормы или истории для {user_id}: {e}", exc_info=True)
-        await db.update_user_daily_goal(db.db_pool, user_id, None) # Пытаемся сбросить норму
+        logger.error(
+            f"Ошибка при сохранении нормы или истории для {user_id}: {e}",
+            exc_info=True
+        )
+        # Пытаемся сбросить норму в users на всякий случай
+        await db.update_user_daily_goal(db.db_pool, user_id, None)
         return None
 
 
 # --- Функция для отображения главного меню настроек ---
-async def show_settings_menu(message_or_callback: Message | CallbackQuery, state: FSMContext):
+async def show_settings_menu(
+    message_or_callback: Message | CallbackQuery, state: FSMContext
+):
     """
     Отображает текущие настройки профиля и инлайн-клавиатуру
     с кнопками для их изменения.
@@ -156,7 +171,7 @@ async def show_settings_menu(message_or_callback: Message | CallbackQuery, state
 
     # Отправляем или редактируем сообщение
     if isinstance(message_or_callback, CallbackQuery):
-         with suppress(TelegramBadRequest): # Игнорируем ошибку (сообщение не изменилось и т.д.)
+         with suppress(TelegramBadRequest): # Игнорируем ошибку
               await message_or_callback.message.edit_text(
                   settings_text,
                   reply_markup=settings_main_keyboard()
@@ -164,7 +179,7 @@ async def show_settings_menu(message_or_callback: Message | CallbackQuery, state
               await state.set_state(Settings.waiting_for_action)
               return # Выходим после успешного редактирования
 
-    # Отправляем новое сообщение, если это было не CallbackQuery или редактирование не удалось
+    # Отправляем новое сообщение
     await answer_method(settings_text, reply_markup=settings_main_keyboard())
     await state.set_state(Settings.waiting_for_action)
 
@@ -202,21 +217,16 @@ async def handle_settings_action(callback: CallbackQuery, state: FSMContext):
     # Обработка возврата в главное меню из подменю
     if action == SETTINGS_SHOW_MENU_ACTION:
         logger.info(f"Пользователь {user_id} вернулся в главное меню настроек.")
-        # Просто показываем главное меню (оно само отредактирует сообщение)
         await show_settings_menu(callback, state)
         return # Выходим, т.к. действие выполнено
 
     # Обработка кнопки "Закрыть настройки"
     if action == "back":
         logger.info(f"Пользователь {user_id} нажал 'Закрыть настройки'.")
-        # Убираем инлайн-клавиатуру настроек
         with suppress(TelegramBadRequest):
             await message.edit_reply_markup(reply_markup=None)
-        # Очищаем состояние FSM
         await state.clear()
-        # Отправляем сообщение о закрытии и основную клавиатуру
         await message.answer("Настройки закрыты.", reply_markup=main_action_keyboard())
-        # Отвечаем на callback и выходим
         await callback.answer()
         return
 
@@ -227,23 +237,32 @@ async def handle_settings_action(callback: CallbackQuery, state: FSMContext):
     # Обработка остальных действий
     if action == "change_goal":
         logger.info(f"Пользователь {user_id} выбрал изменить цель.")
-        await message.answer("Выберите вашу основную цель:", reply_markup=select_goal_keyboard())
-        # Остаемся в состоянии waiting_for_action, ждем нажатия инлайн-кнопки цели
+        await message.answer(
+            "Выберите вашу основную цель:", reply_markup=select_goal_keyboard()
+        )
         await state.set_state(Settings.waiting_for_action)
     elif action == "change_gender":
         logger.info(f"Пользователь {user_id} выбрал изменить пол.")
-        await message.answer("Выберите ваш пол:", reply_markup=select_gender_keyboard())
-        await state.set_state(Settings.waiting_for_action) # Ждем нажатия инлайн-кнопки пола
+        await message.answer(
+            "Выберите ваш пол:", reply_markup=select_gender_keyboard()
+        )
+        await state.set_state(Settings.waiting_for_action)
     elif action == "change_height":
         logger.info(f"Пользователь {user_id} выбрал изменить рост.")
-        await message.answer("Введите ваш рост в сантиметрах (например, 180):", reply_markup=cancel_keyboard())
-        await state.set_state(Settings.waiting_for_height) # Переходим в состояние ожидания роста
+        await message.answer(
+            "Введите ваш рост в сантиметрах (например, 180):",
+            reply_markup=cancel_keyboard()
+        )
+        await state.set_state(Settings.waiting_for_height)
     elif action == "change_weight":
         logger.info(f"Пользователь {user_id} выбрал изменить вес.")
-        await message.answer("Введите ваш текущий вес в килограммах (например, 75.5):", reply_markup=cancel_keyboard())
-        await state.set_state(Settings.waiting_for_weight) # Переходим в состояние ожидания веса
+        await message.answer(
+            "Введите ваш текущий вес в килограммах (например, 75.5):",
+            reply_markup=cancel_keyboard()
+        )
+        await state.set_state(Settings.waiting_for_weight)
 
-    await callback.answer() # Отвечаем на callback для всех действий, кроме "Назад"
+    await callback.answer()
 
 # --- Обработчики CallbackQuery для выбора цели и пола ---
 @router.callback_query(
@@ -256,26 +275,27 @@ async def handle_goal_selection(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     message = callback.message
 
-    # Убираем клавиатуру выбора цели
     with suppress(TelegramBadRequest):
         await message.edit_reply_markup(reply_markup=None)
 
-    goal_to_save = goal if goal != "none" else None # Сохраняем NULL, если выбрано "Не устанавливать"
+    goal_to_save = goal if goal != "none" else None
 
     if db.db_pool:
-        success = await db.update_user_profile_field(db.db_pool, user_id, "goal", goal_to_save)
+        success = await db.update_user_profile_field(
+            db.db_pool, user_id, "goal", goal_to_save
+        )
         if success:
             logger.info(f"Цель для {user_id} установлена на '{goal}'. Пересчет нормы...")
-            await recalculate_and_save_goal(user_id, state) # Пересчитываем норму
+            await recalculate_and_save_goal(user_id, state)
             await message.answer(f"✅ Цель обновлена!")
-            await show_settings_menu(callback, state) # Показываем обновленное меню настроек
+            await show_settings_menu(callback, state)
         else:
-            await message.answer("Не удалось обновить цель. Попробуйте позже.")
-            await show_settings_menu(callback, state) # Возвращаем в меню
+            await message.answer("Не удалось обновить цель.")
+            await show_settings_menu(callback, state)
     else:
-        # Ошибка подключения к БД
         await message.answer("Ошибка подключения к БД.")
-        await state.clear(); await handle_today(message) # Выходим из настроек
+        await state.clear()
+        await handle_today(message)
 
     await callback.answer()
 
@@ -285,27 +305,29 @@ async def handle_goal_selection(callback: CallbackQuery, state: FSMContext):
 )
 async def handle_gender_selection(callback: CallbackQuery, state: FSMContext):
     """Обрабатывает выбор пола."""
-    gender = callback.data.split(":")[1] # 'male' или 'female'
+    gender = callback.data.split(":")[1]
     user_id = callback.from_user.id
     message = callback.message
 
-    # Убираем клавиатуру выбора пола
     with suppress(TelegramBadRequest):
         await message.edit_reply_markup(reply_markup=None)
 
     if db.db_pool:
-        success = await db.update_user_profile_field(db.db_pool, user_id, "gender", gender)
+        success = await db.update_user_profile_field(
+            db.db_pool, user_id, "gender", gender
+        )
         if success:
             logger.info(f"Пол для {user_id} установлен на '{gender}'. Пересчет нормы...")
-            await recalculate_and_save_goal(user_id, state) # Пересчитываем норму
+            await recalculate_and_save_goal(user_id, state)
             await message.answer(f"✅ Пол обновлен!")
-            await show_settings_menu(callback, state) # Показываем обновленное меню
+            await show_settings_menu(callback, state)
         else:
-            await message.answer("Не удалось обновить пол. Попробуйте позже.")
+            await message.answer("Не удалось обновить пол.")
             await show_settings_menu(callback, state)
     else:
         await message.answer("Ошибка подключения к БД.")
-        await state.clear(); await handle_today(message)
+        await state.clear()
+        await handle_today(message)
 
     await callback.answer()
 
@@ -314,58 +336,73 @@ async def handle_gender_selection(callback: CallbackQuery, state: FSMContext):
 async def process_height_input(message: Message, state: FSMContext):
     """Обрабатывает ввод роста."""
     user_id = message.from_user.id
-    # Валидация ввода
     try:
         height = int(message.text.strip())
-        if not (100 <= height <= 250): # Простая проверка диапазона
+        if not (100 <= height <= 250):
             raise ValueError("Рост должен быть в разумных пределах (100-250 см).")
     except (ValueError, AssertionError):
-        await message.reply("Пожалуйста, введите рост целым числом от 100 до 250 см. Или /cancel")
-        return # Остаемся в том же состоянии
+        await message.reply(
+            "Пожалуйста, введите рост целым числом от 100 до 250 см. Или /cancel"
+        )
+        return
 
-    # Обновление в БД
     if db.db_pool:
-        success = await db.update_user_profile_field(db.db_pool, user_id, "height", height)
+        success = await db.update_user_profile_field(
+            db.db_pool, user_id, "height", height
+        )
         if success:
             logger.info(f"Рост для {user_id} установлен на {height} см. Пересчет нормы...")
-            await recalculate_and_save_goal(user_id, state) # Пересчитываем норму
+            await recalculate_and_save_goal(user_id, state)
             await message.answer(f"✅ Рост обновлен!", reply_markup=ReplyKeyboardRemove())
-            await show_settings_menu(message, state) # Возвращаемся в меню настроек
+            await show_settings_menu(message, state)
         else:
-            await message.answer("Не удалось обновить рост. Попробуйте позже.", reply_markup=ReplyKeyboardRemove())
-            await show_settings_menu(message, state) # Все равно возвращаем в меню
+            await message.answer(
+                "Не удалось обновить рост.", reply_markup=ReplyKeyboardRemove()
+            )
+            await show_settings_menu(message, state)
     else:
-        await message.answer("Ошибка подключения к БД.", reply_markup=ReplyKeyboardRemove())
-        await state.clear(); await handle_today(message) # Выходим из настроек
+        await message.answer(
+            "Ошибка подключения к БД.", reply_markup=ReplyKeyboardRemove()
+        )
+        await state.clear()
+        await handle_today(message)
+
 
 @router.message(StateFilter(Settings.waiting_for_weight), F.text)
 async def process_weight_input(message: Message, state: FSMContext):
     """Обрабатывает ввод веса."""
     user_id = message.from_user.id
-    # Валидация ввода (разрешаем точку и запятую)
     try:
         weight_str = message.text.strip().replace(',', '.')
         weight = float(weight_str)
-        if not (30.0 <= weight <= 300.0): # Простая проверка диапазона
+        if not (30.0 <= weight <= 300.0):
             raise ValueError("Вес должен быть в разумных пределах (30-300 кг).")
     except (ValueError, AssertionError):
-        await message.reply("Пожалуйста, введите вес числом от 30 до 300 кг (например, 75.5). Или /cancel")
-        return # Остаемся в том же состоянии
+        await message.reply(
+            "Пожалуйста, введите вес числом от 30 до 300 кг (например, 75.5). Или /cancel"
+        )
+        return
 
-    # Обновление в БД
     if db.db_pool:
-        success = await db.update_user_profile_field(db.db_pool, user_id, "current_weight", weight)
+        success = await db.update_user_profile_field(
+            db.db_pool, user_id, "current_weight", weight
+        )
         if success:
             logger.info(f"Вес для {user_id} установлен на {weight} кг. Пересчет нормы...")
-            await recalculate_and_save_goal(user_id, state) # Пересчитываем норму
+            await recalculate_and_save_goal(user_id, state)
             await message.answer(f"✅ Вес обновлен!", reply_markup=ReplyKeyboardRemove())
-            await show_settings_menu(message, state) # Возвращаемся в меню настроек
+            await show_settings_menu(message, state)
         else:
-            await message.answer("Не удалось обновить вес. Попробуйте позже.", reply_markup=ReplyKeyboardRemove())
+            await message.answer(
+                "Не удалось обновить вес.", reply_markup=ReplyKeyboardRemove()
+            )
             await show_settings_menu(message, state)
     else:
-        await message.answer("Ошибка подключения к БД.", reply_markup=ReplyKeyboardRemove())
-        await state.clear(); await handle_today(message)
+        await message.answer(
+            "Ошибка подключения к БД.", reply_markup=ReplyKeyboardRemove()
+        )
+        await state.clear()
+        await handle_today(message)
 
 # --- Обработчик отмены для состояний ввода (рост, вес) ---
 @router.message(
@@ -380,33 +417,78 @@ async def cancel_settings_input_handler(message: Message, state: FSMContext):
     """Отменяет ввод параметра (рост/вес) и возвращает в меню настроек."""
     logger.info(f"Пользователь {message.from_user.id} отменил ввод параметра настроек.")
     await message.answer("Ввод отменен.", reply_markup=ReplyKeyboardRemove())
-    # Возвращаемся к главному меню настроек
     await show_settings_menu(message, state)
 
 # --- Логика для /timezone (если она нужна) ---
-# (Оставлена без изменений)
 @router.message(Command("timezone"), StateFilter(None))
 async def handle_timezone_command(message: Message, state: FSMContext):
-    user_id = message.from_user.id; logger.info(f"Пользователь {user_id} вызвал /timezone.")
-    if not db.db_pool: await message.answer("Проблема с БД.", reply_markup=main_action_keyboard()); return
+    user_id = message.from_user.id
+    logger.info(f"Пользователь {user_id} вызвал /timezone.")
+    if not db.db_pool:
+        await message.answer("Проблема с БД.", reply_markup=main_action_keyboard())
+        return
     current_tz = await db.get_user_timezone(db.db_pool, user_id)
-    await message.answer(f"Ваш текущий пояс: <b>{current_tz}</b>\n\nВведите новый (напр., <code>Europe/Berlin</code>) или /cancel.\n<a href='{TIMEZONE_LIST_URL}'>Список поясов</a>", reply_markup=cancel_keyboard(), disable_web_page_preview=True)
+    await message.answer(
+        f"Ваш текущий пояс: <b>{current_tz}</b>\n\n"
+        f"Введите новый (напр., <code>Europe/Berlin</code>) или /cancel.\n"
+        f"<a href='{TIMEZONE_LIST_URL}'>Список поясов</a>",
+        reply_markup=cancel_keyboard(), disable_web_page_preview=True
+    )
     await state.set_state(Settings.waiting_for_timezone)
+
 @router.message(StateFilter(Settings.waiting_for_timezone), F.text)
 async def process_timezone_input(message: Message, state: FSMContext):
-    user_id = message.from_user.id; timezone_input = message.text.strip()
-    try: pytz.timezone(timezone_input); is_valid = True
-    except Exception: is_valid = False
+    user_id = message.from_user.id
+    timezone_input = message.text.strip()
+    try:
+        pytz.timezone(timezone_input)
+        is_valid = True
+    except Exception:
+        is_valid = False
+
     if is_valid:
         logger.info(f"Пользователь {user_id} ввел валидный пояс: {timezone_input}")
         if db.db_pool:
-            try: await db.update_user_timezone_db(db.db_pool, user_id, timezone_input); await message.answer(f"✅ Пояс установлен: <b>{timezone_input}</b>", reply_markup=main_action_keyboard()); await state.clear(); await handle_today(message)
-            except Exception as e: logger.error(f"Ошибка обновления TZ в БД для {user_id}: {e}", exc_info=True); await message.answer("Ошибка сохранения. Попробуйте еще раз.", reply_markup=cancel_keyboard())
-        else: logger.error("Пул БД не инициализирован при обновлении TZ."); await message.answer("Проблема с БД.", reply_markup=main_action_keyboard()); await state.clear()
-    else: logger.warning(f"Пользователь {user_id} ввел невалидный пояс: {timezone_input}"); await message.reply(f"Некорректный пояс: <b>{escape(timezone_input)}</b>.\nИспользуйте формат из <a href='{TIMEZONE_LIST_URL}'>списка</a> или /cancel.", disable_web_page_preview=True, reply_markup=cancel_keyboard())
-@router.message(Command("cancel"), StateFilter(Settings.waiting_for_timezone))
-@router.message(F.text == CANCEL_TEXT, StateFilter(Settings.waiting_for_timezone))
+            try:
+                await db.update_user_timezone_db(db.db_pool, user_id, timezone_input)
+                await message.answer(
+                    f"✅ Пояс установлен: <b>{timezone_input}</b>",
+                    reply_markup=main_action_keyboard()
+                )
+                await state.clear()
+                await handle_today(message)
+            except Exception as e:
+                logger.error(f"Ошибка обновления TZ в БД для {user_id}: {e}", exc_info=True)
+                await message.answer(
+                    "Ошибка сохранения. Попробуйте еще раз.",
+                    reply_markup=cancel_keyboard()
+                )
+        else:
+            logger.error("Пул БД не инициализирован при обновлении TZ.")
+            await message.answer("Проблема с БД.", reply_markup=main_action_keyboard())
+            await state.clear()
+    else:
+        logger.warning(f"Пользователь {user_id} ввел невалидный пояс: {timezone_input}")
+        await message.reply(
+            f"Некорректный пояс: <b>{escape(timezone_input)}</b>.\n"
+            f"Используйте формат из <a href='{TIMEZONE_LIST_URL}'>списка</a> или /cancel.",
+            disable_web_page_preview=True,
+            reply_markup=cancel_keyboard()
+        )
+
+@router.message(
+    Command("cancel"),
+    StateFilter(Settings.waiting_for_timezone)
+)
+@router.message(
+    F.text == CANCEL_TEXT,
+    StateFilter(Settings.waiting_for_timezone)
+)
 async def cancel_timezone_handler(message: Message, state: FSMContext):
     logger.info(f"Пользователь {message.from_user.id} отменил установку часового пояса.")
-    await state.clear(); await message.answer("Установка часового пояса отменена.", reply_markup=main_action_keyboard()); await handle_today(message)
+    await state.clear()
+    await message.answer(
+        "Установка часового пояса отменена.", reply_markup=main_action_keyboard()
+    )
+    await handle_today(message)
 

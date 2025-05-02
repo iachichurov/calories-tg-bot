@@ -17,7 +17,7 @@ from handlers.common import set_main_menu
 # --- Настройка логирования ---
 # Устанавливаем базовую конфигурацию логирования
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(name)s - %(message)s'
 )
 # Получаем логгер для этого модуля
