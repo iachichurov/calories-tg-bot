@@ -59,8 +59,37 @@ def settings_main_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="🎯 Изменить Цель", callback_data=f"{SETTINGS_ACTION_CALLBACK_PREFIX}change_goal"), InlineKeyboardButton(text="🧍 Изменить Пол", callback_data=f"{SETTINGS_ACTION_CALLBACK_PREFIX}change_gender"))
     builder.row(InlineKeyboardButton(text="📏 Изменить Рост", callback_data=f"{SETTINGS_ACTION_CALLBACK_PREFIX}change_height"), InlineKeyboardButton(text="⚖️ Изменить Вес", callback_data=f"{SETTINGS_ACTION_CALLBACK_PREFIX}change_weight"))
-    # Кнопка "Назад" из главного меню - закрывает настройки
+    # Новая кнопка для редактирования продуктов
+    builder.row(InlineKeyboardButton(text="📝 Редактирование продуктов", callback_data=f"{SETTINGS_ACTION_CALLBACK_PREFIX}edit_products"))
     builder.row(InlineKeyboardButton(text="🔙 Закрыть настройки", callback_data=f"{SETTINGS_ACTION_CALLBACK_PREFIX}back")) # Можно изменить текст для ясности
+    return builder.as_markup()
+
+# Заготовка для клавиатуры списка продуктов с пагинацией
+EDIT_PRODUCT_ACTION_PREFIX = "edit_prod:"
+PRODUCTS_PAGE_PREFIX = "prod_page:"
+
+def build_edit_products_keyboard(products: list, page: int = 0, page_size: int = 10) -> InlineKeyboardMarkup:
+    """Формирует инлайн-клавиатуру для редактирования продуктов с пагинацией."""
+    builder = InlineKeyboardBuilder()
+    total = len(products)
+    start = page * page_size
+    end = start + page_size
+    page_products = products[start:end]
+    # Кнопки с названиями продуктов
+    for prod in page_products:
+        button_text = f"{prod['product_name']} ({prod['calories_per_100g']} ккал)"
+        callback_data = f"edit_prod:{prod['product_id']}"
+        builder.row(InlineKeyboardButton(text=button_text, callback_data=callback_data))
+    # Пагинация
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"prod_page:{page-1}"))
+    if end < total:
+        nav_buttons.append(InlineKeyboardButton(text="Вперёд ➡️", callback_data=f"prod_page:{page+1}"))
+    if nav_buttons:
+        builder.row(*nav_buttons)
+    # Кнопка возврата
+    builder.row(InlineKeyboardButton(text="🔙 В меню настроек", callback_data=f"{SETTINGS_ACTION_CALLBACK_PREFIX}{SETTINGS_SHOW_MENU_ACTION}"))
     return builder.as_markup()
 
 def select_goal_keyboard() -> InlineKeyboardMarkup:

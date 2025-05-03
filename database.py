@@ -265,3 +265,19 @@ async def search_user_products(pool: asyncpg.Pool, user_id: int, search_query: s
             if isinstance(e, asyncpg.UndefinedFunctionError) and 'gin_trgm_ops' in str(e): logger.error(f"Ошибка контекстного поиска: Расширение 'pg_trgm' не установлено? Выполните 'CREATE EXTENSION IF NOT EXISTS pg_trgm;' в БД.")
             logger.error(f"Ошибка при контекстном поиске '{pattern}' для {user_id}: {e}", exc_info=True); return []
 
+async def get_all_user_products(pool, user_id: int):
+    """Возвращает все продукты пользователя, отсортированные по алфавиту (название, калорийность, id)."""
+    sql = """
+        SELECT product_id, product_name, calories_per_100g
+        FROM user_products
+        WHERE user_id = $1
+        ORDER BY product_name ASC
+    """
+    async with pool.acquire() as connection:
+        try:
+            rows = await connection.fetch(sql, user_id)
+            return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"Ошибка при получении списка продуктов для {user_id}: {e}", exc_info=True)
+            return []
+

@@ -17,7 +17,8 @@ from keyboards import (
     select_goal_keyboard, select_gender_keyboard,
     SETTINGS_ACTION_CALLBACK_PREFIX, GENDER_SELECT_CALLBACK_PREFIX,
     GOAL_SELECT_CALLBACK_PREFIX, CANCEL_TEXT,
-    SETTINGS_SHOW_MENU_ACTION # Импортируем новое действие
+    SETTINGS_SHOW_MENU_ACTION, # Импортируем новое действие
+    build_edit_products_keyboard
 )
 import database as db
 import utils # Наш модуль с расчетами
@@ -491,4 +492,44 @@ async def cancel_timezone_handler(message: Message, state: FSMContext):
         "Установка часового пояса отменена.", reply_markup=main_action_keyboard()
     )
     await handle_today(message)
+
+@router.callback_query(
+    F.data == f"{SETTINGS_ACTION_CALLBACK_PREFIX}edit_products",
+    StateFilter(Settings.waiting_for_action)
+)
+async def handle_edit_products_menu(callback: CallbackQuery, state: FSMContext):
+    """Переход в меню редактирования продуктов (показ списка с пагинацией)."""
+    user_id = callback.from_user.id
+    if not db.db_pool:
+        await callback.answer("Проблема с БД.", show_alert=True)
+        return
+    products = await db.get_all_user_products(db.db_pool, user_id)
+    await state.update_data(edit_products=products, edit_products_page=0)
+    text = "Ваши продукты (страница 1):"
+    if not products:
+        text += "\nСписок пуст."
+    await callback.message.edit_text(
+        text,
+        reply_markup=build_edit_products_keyboard(products, page=0)
+    )
+    await state.set_state(Settings.edit_products_menu)
+
+@router.callback_query(
+    F.data.startswith("prod_page:"),
+    StateFilter(Settings.edit_products_menu)
+)
+async def handle_edit_products_pagination(callback: CallbackQuery, state: FSMContext):
+    """Обработка пагинации по списку продуктов."""
+    data = await state.get_data()
+    products = data.get("edit_products", [])
+    page = int(callback.data.split(":")[1])
+    await state.update_data(edit_products_page=page)
+    text = f"Ваши продукты (страница {page+1}):"
+    if not products:
+        text += "\nСписок пуст."
+    await callback.message.edit_text(
+        text,
+        reply_markup=build_edit_products_keyboard(products, page=page)
+    )
+    await callback.answer()
 

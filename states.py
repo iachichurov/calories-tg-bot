@@ -17,3 +17,10 @@ class Settings(StatesGroup):
     # Для пола и цели будем использовать CallbackQuery, отдельное состояние не нужно
     waiting_for_timezone = State() # <-- ВОССТАНОВЛЕНО: Ожидание ввода часового пояса
 
+    # --- Новые состояния для редактирования продуктов ---
+    edit_products_menu = State()         # Список продуктов с пагинацией
+    edit_product_actions = State()       # Подменю продукта (редактировать/удалить/назад)
+    edit_product_field = State()         # Выбор поля для редактирования
+    edit_product_name = State()          # Ввод нового названия
+    edit_product_calories = State()      # Ввод новой калорийности
+
