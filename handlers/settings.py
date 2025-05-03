@@ -186,11 +186,9 @@ async def show_settings_menu(
 
 
 # --- Обработчики команды /settings и /setweight ---
-@router.message(Command("settings"), StateFilter(None))
+@router.message(Command("settings"))
 async def handle_settings_command(message: Message, state: FSMContext):
-    """Отображает меню настроек профиля по команде /settings."""
-    user_id = message.from_user.id
-    logger.info(f"Пользователь {user_id} вызвал /settings.")
+    logger.info(f"handle_settings_command: user_id={message.from_user.id}, state={await state.get_state()}")
     await show_settings_menu(message, state)
 
 @router.message(Command("setweight"), StateFilter(None))
@@ -262,6 +260,30 @@ async def handle_settings_action(callback: CallbackQuery, state: FSMContext):
             reply_markup=cancel_keyboard()
         )
         await state.set_state(Settings.waiting_for_weight)
+    elif action == "edit_products":
+        logger.info(f"Пользователь {user_id} выбрал редактирование продуктов.")
+        if not db.db_pool:
+            await callback.answer("Проблема с БД.", show_alert=True)
+            return
+        products = await db.get_all_user_products(db.db_pool, user_id)
+        logger.info(f"handle_edit_products_menu: products={products}")
+        await state.update_data(edit_products=products, edit_products_page=0)
+        text = "Ваши продукты (страница 1):"
+        if not products:
+            text += "\nСписок пуст."
+        try:
+            keyboard = build_edit_products_keyboard(products, page=0)
+            logger.info(f"handle_edit_products_menu: keyboard built successfully")
+        except Exception as e:
+            logger.error(f"Ошибка при формировании клавиатуры: {e}", exc_info=True)
+            await callback.message.edit_text("Ошибка при формировании клавиатуры.")
+            return
+        await callback.message.edit_text(
+            text,
+            reply_markup=keyboard
+        )
+        await state.set_state(Settings.edit_products_menu)
+        return
 
     await callback.answer()
 
@@ -494,25 +516,36 @@ async def cancel_timezone_handler(message: Message, state: FSMContext):
     await handle_today(message)
 
 @router.callback_query(
-    F.data == f"{SETTINGS_ACTION_CALLBACK_PREFIX}edit_products",
-    StateFilter(Settings.waiting_for_action)
+    F.data == f"{SETTINGS_ACTION_CALLBACK_PREFIX}edit_products"
 )
 async def handle_edit_products_menu(callback: CallbackQuery, state: FSMContext):
-    """Переход в меню редактирования продуктов (показ списка с пагинацией)."""
+    logger.info(f"handle_edit_products_menu: user_id={callback.from_user.id}, state={await state.get_state()}")
     user_id = callback.from_user.id
-    if not db.db_pool:
-        await callback.answer("Проблема с БД.", show_alert=True)
-        return
-    products = await db.get_all_user_products(db.db_pool, user_id)
-    await state.update_data(edit_products=products, edit_products_page=0)
-    text = "Ваши продукты (страница 1):"
-    if not products:
-        text += "\nСписок пуст."
-    await callback.message.edit_text(
-        text,
-        reply_markup=build_edit_products_keyboard(products, page=0)
-    )
-    await state.set_state(Settings.edit_products_menu)
+    try:
+        if not db.db_pool:
+            await callback.answer("Проблема с БД.", show_alert=True)
+            return
+        products = await db.get_all_user_products(db.db_pool, user_id)
+        logger.info(f"handle_edit_products_menu: products={products}")
+        await state.update_data(edit_products=products, edit_products_page=0)
+        text = "Ваши продукты (страница 1):"
+        if not products:
+            text += "\nСписок пуст."
+        try:
+            keyboard = build_edit_products_keyboard(products, page=0)
+            logger.info(f"handle_edit_products_menu: keyboard built successfully")
+        except Exception as e:
+            logger.error(f"Ошибка при формировании клавиатуры: {e}", exc_info=True)
+            await callback.message.edit_text("Ошибка при формировании клавиатуры.")
+            return
+        await callback.message.edit_text(
+            text,
+            reply_markup=keyboard
+        )
+        await state.set_state(Settings.edit_products_menu)
+    except Exception as e:
+        logger.error(f"handle_edit_products_menu: exception: {e}", exc_info=True)
+        await callback.answer("Внутренняя ошибка. Обратитесь к администратору.", show_alert=True)
 
 @router.callback_query(
     F.data.startswith("prod_page:"),
@@ -691,4 +724,33 @@ async def handle_edit_product_calories_input(message: Message, state: FSMContext
         reply_markup=build_edit_products_keyboard(products, page=page)
     )
     await state.set_state(Settings.edit_products_menu)
+
+@router.callback_query(
+    F.data == f"{SETTINGS_ACTION_CALLBACK_PREFIX}{SETTINGS_SHOW_MENU_ACTION}",
+    StateFilter(Settings.edit_products_menu, Settings.edit_product_actions)
+)
+async def handle_back_to_settings_from_edit_products(callback: CallbackQuery, state: FSMContext):
+    """Возврат в главное меню настроек из меню редактирования продуктов или подменю продукта."""
+    logger.info(f"Возврат в главное меню настроек из редактирования продуктов. user_id={callback.from_user.id}")
+    await show_settings_menu(callback, state)
+
+@router.callback_query(
+    F.data.startswith("prod_page:"),
+    StateFilter(Settings.edit_product_actions)
+)
+async def handle_back_to_products_from_product_menu(callback: CallbackQuery, state: FSMContext):
+    """Возврат к списку продуктов из подменю продукта (по номеру страницы)."""
+    data = await state.get_data()
+    products = data.get("edit_products", [])
+    page = int(callback.data.split(":")[1])
+    await state.update_data(edit_products_page=page)
+    text = f"Ваши продукты (страница {page+1}):"
+    if not products:
+        text += "\nСписок пуст."
+    await callback.message.edit_text(
+        text,
+        reply_markup=build_edit_products_keyboard(products, page=page)
+    )
+    await state.set_state(Settings.edit_products_menu)
+    await callback.answer()
 
