@@ -357,6 +357,9 @@ async def handle_gender_selection(callback: CallbackQuery, state: FSMContext):
 # --- Обработчики ввода роста и веса ---
 @router.message(StateFilter(Settings.waiting_for_height), F.text)
 async def process_height_input(message: Message, state: FSMContext):
+    if message.text.strip() in ("/cancel", CANCEL_TEXT):
+        await cancel_settings_input_handler(message, state)
+        return
     """Обрабатывает ввод роста."""
     user_id = message.from_user.id
     try:
@@ -393,6 +396,9 @@ async def process_height_input(message: Message, state: FSMContext):
 
 @router.message(StateFilter(Settings.waiting_for_weight), F.text)
 async def process_weight_input(message: Message, state: FSMContext):
+    if message.text.strip() in ("/cancel", CANCEL_TEXT):
+        await cancel_settings_input_handler(message, state)
+        return
     """Обрабатывает ввод веса."""
     user_id = message.from_user.id
     try:
@@ -439,6 +445,7 @@ async def process_weight_input(message: Message, state: FSMContext):
 async def cancel_settings_input_handler(message: Message, state: FSMContext):
     """Отменяет ввод параметра (рост/вес) и возвращает в меню настроек."""
     logger.info(f"Пользователь {message.from_user.id} отменил ввод параметра настроек.")
+    await state.clear()  # Сброс состояния FSM
     await message.answer("Ввод отменен.", reply_markup=ReplyKeyboardRemove())
     await show_settings_menu(message, state)
 
