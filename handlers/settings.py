@@ -533,3 +533,162 @@ async def handle_edit_products_pagination(callback: CallbackQuery, state: FSMCon
     )
     await callback.answer()
 
+@router.callback_query(
+    F.data.startswith("edit_prod:"),
+    StateFilter(Settings.edit_products_menu)
+)
+async def handle_edit_product_actions(callback: CallbackQuery, state: FSMContext):
+    """Показывает подменю для выбранного продукта: Редактировать, Удалить, Назад."""
+    product_id = int(callback.data.split(":")[1])
+    data = await state.get_data()
+    products = data.get("edit_products", [])
+    page = data.get("edit_products_page", 0)
+    # Находим продукт по id
+    product = next((p for p in products if p["product_id"] == product_id), None)
+    if not product:
+        await callback.answer("Продукт не найден.", show_alert=True)
+        return
+    # Сохраняем выбранный продукт в state
+    await state.update_data(edit_selected_product_id=product_id)
+    text = f"<b>{product['product_name']}</b> ({product['calories_per_100g']} ккал)\n\nВыберите действие:" 
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"edit_prod_action:edit")],
+        [InlineKeyboardButton(text="🗑️ Удалить", callback_data=f"edit_prod_action:delete")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data=f"prod_page:{page}")]
+    ])
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await state.set_state(Settings.edit_product_actions)
+
+@router.callback_query(
+    F.data.startswith("edit_prod_action:"),
+    StateFilter(Settings.edit_product_actions)
+)
+async def handle_edit_product_action_choice(callback: CallbackQuery, state: FSMContext):
+    """Обработка выбора действия над продуктом: редактировать или удалить."""
+    action = callback.data.split(":")[1]
+    data = await state.get_data()
+    products = data.get("edit_products", [])
+    page = data.get("edit_products_page", 0)
+    product_id = data.get("edit_selected_product_id")
+    product = next((p for p in products if p["product_id"] == product_id), None)
+    if not product:
+        await callback.answer("Продукт не найден.", show_alert=True)
+        return
+    if action == "edit":
+        # Показать подменю выбора поля для редактирования
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✏️ Изменить название", callback_data="edit_prod_field:name")],
+            [InlineKeyboardButton(text="✏️ Изменить калорийность", callback_data="edit_prod_field:calories")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data=f"edit_prod:{product_id}")]
+        ])
+        await callback.message.edit_text(
+            f"<b>{product['product_name']}</b> ({product['calories_per_100g']} ккал)\n\nЧто редактировать?",
+            reply_markup=keyboard, parse_mode="HTML"
+        )
+        await state.set_state(Settings.edit_product_field)
+    elif action == "delete":
+        # Удалить продукт из БД и вернуть к списку
+        if not db.db_pool:
+            await callback.answer("Проблема с БД.", show_alert=True)
+            return
+        await db.delete_user_product(db.db_pool, product_id)
+        # Обновить список продуктов в state
+        products = [p for p in products if p["product_id"] != product_id]
+        await state.update_data(edit_products=products)
+        text = f"Ваши продукты (страница {page+1}):"
+        if not products:
+            text += "\nСписок пуст."
+        await callback.message.edit_text(
+            text,
+            reply_markup=build_edit_products_keyboard(products, page=page)
+        )
+        await state.set_state(Settings.edit_products_menu)
+        await callback.answer("Продукт удалён.")
+    else:
+        await callback.answer("Неизвестное действие.", show_alert=True)
+
+@router.callback_query(
+    F.data.startswith("edit_prod_field:"),
+    StateFilter(Settings.edit_product_field)
+)
+async def handle_edit_product_field_choice(callback: CallbackQuery, state: FSMContext):
+    """Обработка выбора поля для редактирования (название или калорийность)."""
+    field = callback.data.split(":")[1]
+    data = await state.get_data()
+    product_id = data.get("edit_selected_product_id")
+    if field == "name":
+        await callback.message.edit_text("Введите новое название продукта:")
+        await state.set_state(Settings.edit_product_name)
+    elif field == "calories":
+        await callback.message.edit_text("Введите новую калорийность (ккал на 100 г):")
+        await state.set_state(Settings.edit_product_calories)
+    else:
+        await callback.answer("Неизвестное поле.", show_alert=True)
+
+@router.message(StateFilter(Settings.edit_product_name))
+async def handle_edit_product_name_input(message: Message, state: FSMContext):
+    """Обработка ввода нового названия продукта."""
+    data = await state.get_data()
+    products = data.get("edit_products", [])
+    page = data.get("edit_products_page", 0)
+    product_id = data.get("edit_selected_product_id")
+    new_name = message.text.strip()
+    if not new_name:
+        await message.reply("Название не может быть пустым. Попробуйте ещё раз.")
+        return
+    # Проверка на дублирование
+    if any(p["product_name"].lower() == new_name.lower() and p["product_id"] != product_id for p in products):
+        await message.reply("Продукт с таким названием уже есть в вашем списке.")
+        return
+    if not db.db_pool:
+        await message.reply("Проблема с БД.")
+        return
+    await db.update_user_product_name(db.db_pool, product_id, new_name)
+    # Обновить список продуктов в state
+    for p in products:
+        if p["product_id"] == product_id:
+            p["product_name"] = new_name
+    await state.update_data(edit_products=products)
+    text = f"Ваши продукты (страница {page+1}):"
+    if not products:
+        text += "\nСписок пуст."
+    await message.answer(
+        text,
+        reply_markup=build_edit_products_keyboard(products, page=page)
+    )
+    await state.set_state(Settings.edit_products_menu)
+
+@router.message(StateFilter(Settings.edit_product_calories))
+async def handle_edit_product_calories_input(message: Message, state: FSMContext):
+    """Обработка ввода новой калорийности продукта."""
+    data = await state.get_data()
+    products = data.get("edit_products", [])
+    page = data.get("edit_products_page", 0)
+    product_id = data.get("edit_selected_product_id")
+    try:
+        new_calories = int(message.text.strip())
+        if new_calories < 0 or new_calories > 2000:
+            raise ValueError
+    except Exception:
+        await message.reply("Введите целое число калорий от 0 до 2000.")
+        return
+    if not db.db_pool:
+        await message.reply("Проблема с БД.")
+        return
+    await db.update_user_product_calories(db.db_pool, product_id, new_calories)
+    # Обновить список продуктов в state
+    for p in products:
+        if p["product_id"] == product_id:
+            p["calories_per_100g"] = new_calories
+    await state.update_data(edit_products=products)
+    text = f"Ваши продукты (страница {page+1}):"
+    if not products:
+        text += "\nСписок пуст."
+    await message.answer(
+        text,
+        reply_markup=build_edit_products_keyboard(products, page=page)
+    )
+    await state.set_state(Settings.edit_products_menu)
+

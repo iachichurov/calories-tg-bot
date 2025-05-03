@@ -281,3 +281,33 @@ async def get_all_user_products(pool, user_id: int):
             logger.error(f"Ошибка при получении списка продуктов для {user_id}: {e}", exc_info=True)
             return []
 
+async def delete_user_product(pool, product_id: int):
+    """Удаляет продукт по product_id."""
+    sql = "DELETE FROM user_products WHERE product_id = $1;"
+    async with pool.acquire() as connection:
+        try:
+            await connection.execute(sql, product_id)
+            logger.info(f"Продукт {product_id} удалён.")
+        except Exception as e:
+            logger.error(f"Ошибка при удалении продукта {product_id}: {e}", exc_info=True)
+
+async def update_user_product_name(pool, product_id: int, new_name: str):
+    """Обновляет название продукта по product_id."""
+    sql = "UPDATE user_products SET product_name = $1, last_used_at = NOW() WHERE product_id = $2;"
+    async with pool.acquire() as connection:
+        try:
+            await connection.execute(sql, new_name, product_id)
+            logger.info(f"Название продукта {product_id} обновлено на '{new_name}'.")
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении названия продукта {product_id}: {e}", exc_info=True)
+
+async def update_user_product_calories(pool, product_id: int, new_calories: int):
+    """Обновляет калорийность продукта по product_id."""
+    sql = "UPDATE user_products SET calories_per_100g = $1, last_used_at = NOW() WHERE product_id = $2;"
+    async with pool.acquire() as connection:
+        try:
+            await connection.execute(sql, new_calories, product_id)
+            logger.info(f"Калорийность продукта {product_id} обновлена на {new_calories} ккал.")
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении калорийности продукта {product_id}: {e}", exc_info=True)
+
