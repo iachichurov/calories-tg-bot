@@ -5,28 +5,31 @@ FROM python:3.12-slim
 # Устанавливаем рабочую директорию внутри контейнера
 WORKDIR /app
 
-# --- ИЗМЕНЕНО: Устанавливаем curl ---
-# Обновляем список пакетов и устанавливаем curl
-# -y - автоматически отвечать "да" на запросы установки
-# --no-install-recommends - не устанавливать необязательные рекомендованные пакеты
-# && apt-get clean - очищаем кеш apt после установки для уменьшения размера образа
+# --- ИЗМЕНЕНО: Устанавливаем curl и tzdata ---
+# Обновляем список пакетов
+# Устанавливаем curl (для отладки сети) и tzdata (данные часовых поясов)
+# -y - автоматически отвечать "да"
+# --no-install-recommends - не ставить лишние пакеты
+# && apt-get clean - очищаем кеш apt
+# && rm -rf /var/lib/apt/lists/* - удаляем списки пакетов для уменьшения размера
 RUN apt-get update && \
-    apt-get install -y curl --no-install-recommends && \
+    apt-get install -y --no-install-recommends curl tzdata && \
     apt-get clean && \
+    ln -fs /usr/share/zoneinfo/UTC /etc/localtime && \
+    dpkg-reconfigure -f noninteractive tzdata && \
     rm -rf /var/lib/apt/lists/*
-    
-# Копируем файл с зависимостями в рабочую директорию
+ENV TZ=UTC
+
+# Копируем файл с зависимостями
 COPY requirements.txt .
 
-# Устанавливаем зависимости
-# --no-cache-dir - не сохранять кеш pip, чтобы уменьшить размер образа
-# --upgrade pip - обновляем pip до последней версии
+# Устанавливаем Python-зависимости
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Копируем весь остальной код приложения в рабочую директорию
-# Убедись, что у тебя есть .dockerignore файл, чтобы не копировать лишнее (venv, .git, .env и т.д.)
+# Копируем код приложения
+# Убедись, что .dockerignore настроен правильно
 COPY . .
 
-# Указываем команду, которая будет запускаться при старте контейнера
+# Команда для запуска бота
 CMD ["python", "main.py"]
