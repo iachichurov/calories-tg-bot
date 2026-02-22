@@ -2,7 +2,7 @@ import logging
 import pytz
 from html import escape
 # Используем date из datetime для работы с датой
-from datetime import date, datetime, UTC
+from datetime import date, datetime, timezone
 from aiogram import Router, F, Bot
 from aiogram.filters import Command, StateFilter
 from aiogram.types import Message, ReplyKeyboardRemove, CallbackQuery
@@ -84,7 +84,7 @@ async def recalculate_and_save_goal(user_id: int, state: FSMContext):
     # Сохранение нормы и запись в историю
     try:
         await db.update_user_daily_goal(db.db_pool, user_id, calories)
-        today_utc_date = datetime.now(UTC).date()
+        today_utc_date = datetime.now(timezone.utc).date()
         await db.add_goal_history_entry(
             db.db_pool, user_id, today_utc_date, calories
         )
