@@ -11,6 +11,8 @@ services:
     depends_on:
       db:
         condition: service_healthy # Ждать, пока сервис db не станет "здоровым" (см. healthcheck ниже)
+      redis:
+        condition: service_healthy # Ждать готовности Redis для FSM
     networks:
       - bot-network # Подключаем к нашей сети
 
@@ -41,6 +43,22 @@ services:
       timeout: 5s # Таймаут проверки 5 секунд
       retries: 5 # 5 попыток перед тем, как считать сервис нездоровым
 
+  # Сервис для Redis (FSM storage)
+  redis:
+    image: redis:7-alpine
+    container_name: calorie_bot_redis_container
+    restart: always
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - bot-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 # Определяем сети
 networks:
   bot-network:
@@ -49,3 +67,4 @@ networks:
 # Определяем именованные тома для сохранения данных
 volumes:
   postgres_data: # Данные будут храниться здесь даже после удаления контейнера
+  redis_data: # Данные Redis (FSM)

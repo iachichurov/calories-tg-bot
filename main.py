@@ -5,6 +5,11 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
 
+try:
+    from aiogram.fsm.storage.redis import RedisStorage
+except ImportError:  # pragma: no cover - зависит от установленного extra redis
+    RedisStorage = None
+
 # Импортируем конфигурацию
 import config
 # Импортируем функции для работы с БД
@@ -23,13 +28,39 @@ logging.basicConfig(
 # Получаем логгер для этого модуля
 logger = logging.getLogger(__name__)
 
+
+def create_fsm_storage():
+    """Создает FSM-хранилище (Redis для prod, fallback на память)."""
+    storage_type = config.FSM_STORAGE
+
+    if storage_type == "redis":
+        if RedisStorage is None:
+            logger.warning(
+                "FSM_STORAGE=redis, но RedisStorage недоступен. "
+                "Используется MemoryStorage fallback."
+            )
+            return MemoryStorage()
+
+        try:
+            logger.info(f"Используется Redis FSM storage: {config.REDIS_URL}")
+            return RedisStorage.from_url(config.REDIS_URL)
+        except Exception as e:
+            logger.warning(
+                f"Не удалось инициализировать RedisStorage ({e}). "
+                "Используется MemoryStorage fallback."
+            )
+            return MemoryStorage()
+
+    logger.info("Используется MemoryStorage для FSM.")
+    return MemoryStorage()
+
 # --- Основная функция запуска ---
 async def main():
     """Главная асинхронная функция для запуска бота."""
     logger.info("Запуск бота...")
 
-    # Инициализация хранилища FSM (пока в памяти)
-    storage = MemoryStorage()
+    # Инициализация хранилища FSM
+    storage = create_fsm_storage()
 
     # Инициализация бота с настройками по умолчанию (HTML parse_mode)
     defaults = DefaultBotProperties(parse_mode="HTML")
@@ -69,4 +100,3 @@ if __name__ == "__main__":
     except Exception as e:
         # Логируем критические ошибки при запуске
         logger.critical(f"Критическая ошибка при запуске бота: {e}", exc_info=True)
-

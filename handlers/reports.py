@@ -19,6 +19,65 @@ from keyboards import main_action_keyboard
 # Настраиваем логирование для этого модуля
 logger = logging.getLogger(__name__)
 
+
+# Критический расчётный функционал (вынесен для юнит-тестов)
+def calculate_average_for_period(total_value: int, period_days: int) -> int:
+    """Возвращает среднее значение за полный период (округление до int)."""
+    if period_days <= 0:
+        return 0
+    return round(total_value / period_days)
+
+
+def calculate_total_norm_for_period(
+    period_start_date: date,
+    period_days: int,
+    historical_norms_records: list[dict],
+    current_daily_goal: int | None,
+) -> tuple[int, int, bool]:
+    """
+    Рассчитывает суммарную и среднюю норму за полный период.
+
+    Возвращает: (total_norm_period, average_norm_period, norm_calculated)
+    """
+    if period_days <= 0:
+        return 0, 0, False
+
+    if not historical_norms_records:
+        if current_daily_goal:
+            total_norm_period = current_daily_goal * period_days
+            return total_norm_period, current_daily_goal, True
+        return 0, 0, False
+
+    norms_dict = {
+        record['effective_date']: record['daily_calorie_goal']
+        for record in historical_norms_records
+    }
+    history_dates_sorted = sorted(norms_dict.keys())
+
+    total_norm_period = 0
+    applicable_norm_found_for_any_day = False
+
+    for i in range(period_days):
+        entry_date = period_start_date + timedelta(days=i)
+        applicable_norm = None
+        for history_date in reversed(history_dates_sorted):
+            if history_date <= entry_date:
+                applicable_norm = norms_dict[history_date]
+                break
+
+        if applicable_norm is not None:
+            total_norm_period += applicable_norm
+            applicable_norm_found_for_any_day = True
+        elif current_daily_goal:
+            total_norm_period += current_daily_goal
+            applicable_norm_found_for_any_day = True
+
+    if not applicable_norm_found_for_any_day:
+        return 0, 0, False
+
+    return total_norm_period, round(total_norm_period / period_days), True
+
+
 # Словарь с русскими названиями месяцев для красивого вывода
 RUSSIAN_MONTHS = {
     1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
@@ -61,39 +120,23 @@ async def handle_today(message: Message):
     # Получаем записи о еде за сегодня с учетом часового пояса
     entries = await db.get_todays_food_entries(db.db_pool, user_id, tz_name)
 
-    # --- ОТЛАДОЧНЫЙ ЛОГ: Записи, полученные для /today ---
-    # logger.debug(f"/today для {user_id} (TZ: {tz_name}). Получено записей: {len(entries)}")
-    # for i, entry in enumerate(entries):
-    #     logger.debug(
-    #         f"  Запись {i+1}: UTC={entry['entry_timestamp']}, "
-    #         f"Локальное={entry['entry_timestamp'].astimezone(user_tz)}, "
-    #         f"Ккал={entry['calories_consumed']}"
-    #      )
-    # --- КОНЕЦ ЛОГА ---
-
-
     # Считаем общую калорийность потребленную за сегодня
     total_calories_consumed = sum(entry['calories_consumed'] for entry in entries)
 
     # Формируем список продуктов
     entries_text_parts = []
     if entries:
-        # logger.debug(f"Начинаем цикл обработки {len(entries)} записей для /today...")
         for i, entry in enumerate(entries):
             try:
-                # logger.debug(f"  Обработка записи {i+1}: Данные = {dict(entry)}")
                 product_name = entry['product_name']
                 weight = entry['weight_grams']
                 calories = entry['calories_consumed']
-                # logger.debug(f"    -> Продукт: '{product_name}', Вес: {weight}, Ккал: {calories}")
 
                 product_name_safe = escape(product_name) # Экранируем для HTML
                 formatted_string = (
                     f"- {product_name_safe} ({weight}г): {calories} ккал"
                 )
-                # logger.debug(f"    -> Сформированная строка: '{formatted_string}'")
                 entries_text_parts.append(formatted_string)
-                # Суммирование происходит один раз перед циклом
             except KeyError as e:
                 logger.error(
                     f"Ошибка KeyError при доступе к полю записи {i+1}: {e}. "
@@ -105,7 +148,6 @@ async def handle_today(message: Message):
                      f"Данные записи: {dict(entry)}", exc_info=True
                  )
 
-        # logger.debug(f"Цикл завершен. entries_text_parts: {entries_text_parts}, total_calories_consumed: {total_calories_consumed}")
         entries_text = "\n".join(entries_text_parts)
     else:
         entries_text = "Пока ничего не добавлено."
@@ -113,7 +155,6 @@ async def handle_today(message: Message):
     # --- Формируем блок с нормой и мотивацией ---
     goal_section = ""
     motivation_message = ""
-    daily_goal_calories = None
 
     if profile_data:
         daily_goal_calories = profile_data.get('daily_calorie_goal')
@@ -152,7 +193,7 @@ async def handle_today(message: Message):
     # --- Собираем итоговое сообщение ---
     now_local_str = datetime.now(user_tz).strftime('%d.%m.%Y')
     final_message_parts = [
-        f"📊 **Сводка за сегодня ({now_local_str}, {tz_name}):**\n",
+        f"📊 <b>Сводка за сегодня ({now_local_str}, {tz_name}):</b>\n",
         goal_section
     ]
     if motivation_message:
@@ -163,8 +204,6 @@ async def handle_today(message: Message):
         f"Потреблено сегодня: <b>{total_calories_consumed}</b> ккал\n",
         entries_text
     ])
-
-    # logger.debug(f"Отправка сообщения /today. entries_text='{entries_text}', total_calories_consumed={total_calories_consumed}")
 
     # Отправляем собранное сообщение
     await message.answer(
@@ -213,104 +252,38 @@ async def handle_week(message: Message):
 
     # Группируем потребление по локальным датам
     calories_by_day = defaultdict(int)
-    dates_with_entries = set()
     for entry in entries:
         entry_local_time = entry['entry_timestamp'].astimezone(user_tz)
         entry_date = entry_local_time.date()
         calories_by_day[entry_date] += entry['calories_consumed']
-        dates_with_entries.add(entry_date)
 
     total_calories_consumed = sum(calories_by_day.values())
-    days_with_entries_count = len(dates_with_entries)
-    average_calories_consumed = (
-        round(total_calories_consumed / days_with_entries_count)
-        if days_with_entries_count > 0 else 0
-    )
+    average_calories_consumed = calculate_average_for_period(total_calories_consumed, num_days_report)
 
     # --- Расчет исторической нормы ---
-    total_norm_period = 0
-    average_norm_period = 0
-    norm_calculated = False
-
     # Определяем границы периода
     report_end_date = datetime.now(user_tz).date()
     report_start_date = report_end_date - timedelta(days=num_days_report - 1)
 
-    # Получаем историю и первую дату
+    # Получаем историю
     historical_norms_records = await db.get_historical_norms(
         db.db_pool, user_id, report_start_date, report_end_date
     )
-    first_history_date = await db.get_first_goal_history_date(db.db_pool, user_id)
 
-    # Определяем метод расчета
-    use_simple_method = not first_history_date or first_history_date > report_start_date
-
-    if use_simple_method:
-        # Простой метод
-        if current_daily_goal:
-            total_norm_period = current_daily_goal * days_with_entries_count
-            average_norm_period = current_daily_goal # Средняя равна текущей
-            norm_calculated = True
-            logger.debug(
-                f"Расчет нормы (простой): тек.={current_daily_goal}, "
-                f"дней={days_with_entries_count} -> итого={total_norm_period}, "
-                f"среднее={average_norm_period}"
-            )
-        else:
-            logger.debug("Расчет нормы (простой): текущая норма не задана.")
-    else:
-        # Сложный метод
-        logger.debug(f"Расчет нормы (сложный). История: {historical_norms_records}")
-        norms_dict = {
-            record['effective_date']: record['daily_calorie_goal']
-            for record in historical_norms_records
-        }
-        history_dates_sorted = sorted(norms_dict.keys())
-        applicable_norm_found_for_any_day = False
-
-        for entry_date in sorted(list(dates_with_entries)):
-            applicable_norm = None
-            applicable_history_date = None
-            for history_date in reversed(history_dates_sorted):
-                if history_date <= entry_date:
-                    applicable_norm = norms_dict[history_date]
-                    applicable_history_date = history_date
-                    break
-            if applicable_norm is not None:
-                total_norm_period += applicable_norm
-                applicable_norm_found_for_any_day = True
-                # logger.debug(f"  -> Для {entry_date}: норма {applicable_norm} (с {applicable_history_date})")
-            else:
-                if current_daily_goal:
-                    total_norm_period += current_daily_goal
-                    applicable_norm_found_for_any_day = True
-                    # logger.debug(f"  -> Для {entry_date}: норма не найдена, используем текущую {current_daily_goal}")
-                # else: logger.debug(f"  -> Для {entry_date}: норма не найдена, текущая не задана.")
-
-        if applicable_norm_found_for_any_day:
-            average_norm_period = (
-                round(total_norm_period / days_with_entries_count)
-                if days_with_entries_count > 0 else 0
-            )
-            norm_calculated = True
-            logger.debug(
-                f"Расчет нормы (сложный): итого={total_norm_period}, "
-                f"среднее={average_norm_period}"
-            )
-        else:
-            logger.debug("Расчет нормы (сложный): не удалось найти применимую норму.")
+    total_norm_period, average_norm_period, norm_calculated = calculate_total_norm_for_period(
+        period_start_date=report_start_date,
+        period_days=num_days_report,
+        historical_norms_records=historical_norms_records,
+        current_daily_goal=current_daily_goal,
+    )
 
     # --- Формируем текст отчета ---
-    report_parts = [f"📅 **Отчет за последние {num_days_report} дней ({tz_name}):**\n"]
+    report_parts = [f"📅 <b>Отчет за последние {num_days_report} дней ({tz_name}):</b>\n"]
     report_parts.append("По дням (потреблено):")
-    # --- ИЗМЕНЕНО: Цикл для обратного порядка дней ---
     for i in range(num_days_report):
-        # Вычисляем дату, идя назад от сегодняшнего дня
         current_date = report_end_date - timedelta(days=i)
-        # Берем калории из словаря, если нет - 0
         cals_consumed = calories_by_day.get(current_date, 0)
         report_parts.append(f"- {current_date.strftime('%d.%m')}: {cals_consumed} ккал")
-    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
     report_parts.append(f"\n--------------------")
     if norm_calculated:
@@ -326,7 +299,7 @@ async def handle_week(message: Message):
         report_parts.append(f"Потреблено всего: <b>{total_calories_consumed}</b> ккал")
         report_parts.append(
             f"Среднесуточное: <b>{average_calories_consumed}</b> ккал "
-            f"(за {days_with_entries_count} дн.)"
+            f"(за {num_days_report} дн.)"
         )
         report_parts.append(
             f"<i>(Норма не рассчитана. Заполните профиль в /settings)</i>"
@@ -373,95 +346,37 @@ async def handle_month(message: Message):
 
     # Группируем потребление по дням
     calories_by_day = defaultdict(int)
-    dates_with_entries = set()
     for entry in entries:
         entry_local_time = entry['entry_timestamp'].astimezone(user_tz)
         entry_date = entry_local_time.date()
         calories_by_day[entry_date] += entry['calories_consumed']
-        dates_with_entries.add(entry_date)
 
     total_calories_consumed = sum(calories_by_day.values())
-    days_with_entries_count = len(dates_with_entries)
-    average_calories_consumed = (
-        round(total_calories_consumed / days_with_entries_count)
-        if days_with_entries_count > 0 else 0
-    )
-
-    # --- Расчет исторической нормы ---
-    total_norm_period = 0
-    average_norm_period = 0
-    norm_calculated = False
 
     # Определяем границы месяца
     now_local = datetime.now(user_tz)
     report_start_date = date(now_local.year, now_local.month, 1)
     report_end_date = now_local.date() # Конец - сегодняшний день
+    days_in_period = now_local.day
+    average_calories_consumed = calculate_average_for_period(total_calories_consumed, days_in_period)
 
-    # Получаем историю и первую дату
+    # --- Расчет исторической нормы ---
+    # Получаем историю
     historical_norms_records = await db.get_historical_norms(
         db.db_pool, user_id, report_start_date, report_end_date
     )
-    first_history_date = await db.get_first_goal_history_date(db.db_pool, user_id)
 
-    # Определяем метод расчета
-    use_simple_method = not first_history_date or first_history_date > report_start_date
-
-    if use_simple_method:
-        # Простой метод
-        if current_daily_goal:
-            total_norm_period = current_daily_goal * days_with_entries_count
-            average_norm_period = current_daily_goal # Средняя равна текущей
-            norm_calculated = True
-            logger.debug(
-                f"Расчет нормы месяца (простой): тек.={current_daily_goal}, "
-                f"дней={days_with_entries_count} -> итого={total_norm_period}"
-            )
-        else:
-            logger.debug("Расчет нормы месяца (простой): текущая норма не задана.")
-    else:
-        # Сложный метод
-        logger.debug(f"Расчет нормы месяца (сложный). История: {historical_norms_records}")
-        norms_dict = {
-            record['effective_date']: record['daily_calorie_goal']
-            for record in historical_norms_records
-        }
-        history_dates_sorted = sorted(norms_dict.keys())
-        applicable_norm_found_for_any_day = False
-
-        for entry_date in dates_with_entries: # Итерируем только по дням с записями
-            applicable_norm = None
-            for history_date in reversed(history_dates_sorted):
-                if history_date <= entry_date:
-                    applicable_norm = norms_dict[history_date]
-                    break
-            if applicable_norm is not None:
-                total_norm_period += applicable_norm
-                applicable_norm_found_for_any_day = True
-                # logger.debug(f"  -> Для {entry_date}: норма {applicable_norm} (с {history_date})")
-            else:
-                if current_daily_goal:
-                    total_norm_period += current_daily_goal
-                    applicable_norm_found_for_any_day = True
-                    # logger.debug(f"  -> Для {entry_date}: норма не найдена, используем текущую {current_daily_goal}")
-                # else: logger.debug(f"  -> Для {entry_date}: норма не найдена, текущая не задана.")
-
-        if applicable_norm_found_for_any_day:
-            average_norm_period = (
-                round(total_norm_period / days_with_entries_count)
-                if days_with_entries_count > 0 else 0
-            )
-            norm_calculated = True
-            logger.debug(
-                f"Расчет нормы месяца (сложный): итого={total_norm_period}, "
-                f"среднее={average_norm_period}"
-            )
-        else:
-            logger.debug("Расчет нормы месяца (сложный): не удалось найти применимую норму.")
+    total_norm_period, average_norm_period, norm_calculated = calculate_total_norm_for_period(
+        period_start_date=report_start_date,
+        period_days=days_in_period,
+        historical_norms_records=historical_norms_records,
+        current_daily_goal=current_daily_goal,
+    )
 
     # --- Формируем текст отчета ---
     month_number = now_local.month
     month_name = RUSSIAN_MONTHS.get(month_number, f"Месяц {month_number}")
-    report_parts = [f"🗓️ **Отчет за {month_name} {now_local.year} ({tz_name}):**\n"]
+    report_parts = [f"🗓️ <b>Отчет за {month_name} {now_local.year} ({tz_name}):</b>\n"]
     report_parts.append(f"--------------------")
     if norm_calculated:
         report_parts.append(
@@ -476,7 +391,7 @@ async def handle_month(message: Message):
         report_parts.append(f"Потреблено всего: <b>{total_calories_consumed}</b> ккал")
         report_parts.append(
             f"Среднесуточное: <b>{average_calories_consumed}</b> ккал "
-            f"(за {days_with_entries_count} дн.)"
+            f"(за {days_in_period} дн.)"
         )
         report_parts.append(
             f"<i>(Норма не рассчитана. Заполните профиль в /settings)</i>"
@@ -484,4 +399,3 @@ async def handle_month(message: Message):
 
     # Отправляем отчет
     await message.answer("\n".join(report_parts), reply_markup=main_action_keyboard())
-

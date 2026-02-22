@@ -35,6 +35,7 @@
 - **Работа с HTTP**: aiohttp (для API Open Food Facts)
 - **Работа с часовыми поясами**: pytz
 - **Контейнеризация**: Docker, Docker Compose
+- **Кэш/хранилище состояний FSM**: Redis 7+
 - **Зависимости**: python-dotenv
 
 ## Установка и запуск
@@ -76,11 +77,7 @@
    - Установить PostgreSQL, если не установлен.
    - Создать базу данных (например, `meal_taken_bot_db`).
    - Создать пользователя и выдать ему права на эту базу.
-   - Установить расширение `pg_trgm`:
-
-     ```sql
-     CREATE EXTENSION IF NOT EXISTS pg_trgm;
-     ```
+   - Расширение `pg_trgm` создается автоматически при старте бота (если у пользователя БД есть права на `CREATE EXTENSION`).
 
 5. **Создать файл `.env`**:
 
@@ -94,6 +91,8 @@
      DB_HOST=localhost # Или адрес вашего сервера БД
      DB_PORT=5432 # Или другой порт
      DB_NAME=имя_бд # Например, meal_taken_bot_db
+     FSM_STORAGE=redis # или memory
+     REDIS_URL=redis://localhost:6379/0
      ```
 
 6. **Запустить бота**:
@@ -116,6 +115,8 @@
    - Заполни `BOT_TOKEN`, `DB_USER`, `DB_PASS`, `DB_NAME`.
    - Установи `DB_HOST=db` (имя сервиса БД из `docker-compose.yml`).
    - Установи `DB_PORT=5432`.
+   - Установи `FSM_STORAGE=redis`.
+   - Установи `REDIS_URL=redis://redis:6379/0`.
 
 3. **Запустить контейнеры**:
 
@@ -125,17 +126,14 @@
 
    > Флаг `--build` нужен при первом запуске и после изменений в коде или `Dockerfile`.
 
-4. **Установить расширение `pg_trgm` (только при первом запуске базы данных)**:
-
-   ```bash
-   docker compose exec db psql -U ${DB_USER} -d ${DB_NAME} -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
-   ```
+4. **Проверить, что у пользователя БД есть права на создание расширений** (нужно для автоинициализации `pg_trgm` при первом старте).
 
 5. **Просмотр логов**:
 
    ```bash
    docker compose logs -f bot # Логи бота
    docker compose logs -f db  # Логи базы данных
+   docker compose logs -f redis # Логи Redis
    ```
 
 6. **Остановка**:

@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, time, date, timedelta, UTC
+from datetime import datetime, time, date, timedelta, timezone
 import asyncpg
 import pytz
 from typing import Optional, List, Dict, Any
@@ -23,7 +23,7 @@ async def create_db_pool():
         await create_tables_if_not_exist(db_pool)
     except Exception as e:
         logger.critical(f"Не удалось подключиться к базе данных: {e}", exc_info=True)
-        exit("Ошибка подключения к БД")
+        raise RuntimeError("Ошибка подключения к БД") from e
     return db_pool
 
 async def close_db_pool():
@@ -61,6 +61,7 @@ async def create_tables_if_not_exist(pool: asyncpg.Pool):
             await connection.execute("""
                 CREATE INDEX IF NOT EXISTS idx_user_products_user_id_name ON user_products (user_id, product_name);
             """)
+            await connection.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
             await connection.execute("""
                 CREATE INDEX IF NOT EXISTS idx_user_products_name_gin ON user_products USING gin (product_name gin_trgm_ops);
             """)
@@ -217,7 +218,7 @@ async def add_user_product(pool: asyncpg.Pool, user_id: int, product_name: str, 
 # --- ИЗМЕНЕНО: Добавляем RETURNING entry_timestamp и логируем результат ---
 async def add_food_entry(pool: asyncpg.Pool, user_id: int, product_name: str, weight_grams: int, calories_consumed: int):
     """Добавляет запись о приеме пищи с текущим временем UTC."""
-    current_utc_time = datetime.now(UTC) # Получаем текущее время UTC
+    current_utc_time = datetime.now(timezone.utc) # Получаем текущее время UTC
     logger.debug(f"Добавление записи для {user_id}: Продукт='{product_name}', Вес={weight_grams}, Ккал={calories_consumed}, Время UTC={current_utc_time}")
     sql = """
         INSERT INTO food_entries (user_id, product_name, weight_grams, calories_consumed, entry_timestamp)
